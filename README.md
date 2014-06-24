@@ -28,14 +28,14 @@ This will ensure all measurements have an accurate timestamp regardless of the w
 Power will be provided to the weather station via a solar-charged 3.7V LiPo cell.
 
 
-Files in this repository:
+Directories in this repository:
 
-Weather.ino
+Weather
   Arduino code that runs immediately at the data collection source.
   This code is meant to be light weight and fast.
   This will eventually employ the Arduino's watchdog timer and interrupts to manage power consumption
   
-BaseStation.??
+BaseStation
   This will be the code that runs on the Raspberry Pi server.
   It will parse and validate all the data from the weather station Arduino.
   It will also upload to the Wunderground API.
