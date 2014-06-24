@@ -6,61 +6,61 @@
 #include <SD.h>
 
 byte macAddr[] = 
-  { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };  // Ethernet shield MAC address
+  { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xAD };  // Ethernet shield MAC address
 unsigned int UdpPort = 8888;               // UDP port to receive time data from NIST
 EthernetUDP Udp;                           // Arduino Udp object
 IPAddress timeServer(216, 171, 120, 36);   // nist1-ch1.ustiming.org (Chicago)
 const int NTP_PACKET_SIZE = 48;            // NTP time stamp is found in first 48 bytes
 byte packetBuffer[NTP_PACKET_SIZE];        // Buffer to hold incoming and outgoing packets               
-const long TZ_OFFSET = -18000;
 const int DELAY_SECONDS = 60;
 const int DS18B20_PIN = 7;
+const int SD_CHIP_SELECT = 8;
+const int ETH_CHIP_SELECT = 10;
 OneWire ds(DS18B20_PIN);
 File logFile;
-const int SD_CHIP_SELECT = 8;
+time_t t;
 
 void setup()
 {
+    Serial.begin(9600); 
+    Serial.println("starting Ethernet");
+    Eth_On();
     if (Ethernet.begin(macAddr) == 0)
     {
         Serial.println("DHCP failure");
         while (true);  // No connection, so halt
     }
-    Udp.begin(UdpPort);
-    setSyncProvider(GetNtpTime);
-    while(timeStatus() == timeNotSet);  // wait for sync
-    pinMode(10, OUTPUT);
-    Serial.begin(9600); 
+    delay(1000);
+    if(!Udp.begin(UdpPort)) Serial.println("Udp error");
+    else Serial.println("Udp started");
+    t = GetNtpTime();
+    SD_On();
     if (!SD.begin(SD_CHIP_SELECT))
     {
         Serial.println("SD init failed.");
         return;
     }
     Serial.println("SD init successful.");
-    logFile = SD.open("log.txt", FILE_WRITE);
-    if (logFile)
-        logFile.println("Time,Temp (°C)");
-    logFile.close();
 }
 
 void loop()
 {
-    String d = ISODateTime();
-    Serial.print(d);
+    time_t tm = t + (millis() / 1000);
+    Serial.print(tm);
     Serial.print(",");
     Serial.print(GetTemp());
     Serial.println();
     logFile = SD.open("log.txt", FILE_WRITE);
-    logFile.print(d);
+    logFile.print(tm);
     logFile.print(",");
     logFile.print(GetTemp());
     logFile.println();
-    delay(DELAY_SECONDS * 1000);
     logFile.close();
+    delay(10000);
 }
 
 // Builds and sends a request packet and stores the response in packetBuffer
-unsigned long SendNtpPacket(IPAddress addr)
+unsigned long SendNtpPacket(IPAddress& addr)
 {
     // Clear out packetBuffer
     memset(packetBuffer, 0, NTP_PACKET_SIZE);
@@ -88,35 +88,13 @@ unsigned long SecsSince1970(byte buffer[])
 {
     unsigned long highWord = word(buffer[40], buffer[41]);
     unsigned long lowWord = word(buffer[42], buffer[43]);
-    return (highWord << 16 | lowWord) - 2208988800 + TZ_OFFSET;
+    return (highWord << 16 | lowWord) - 2208988800;
 }
 
 unsigned long GetNtpTime()
 {
    SendNtpPacket(timeServer);
    return SecsSince1970(packetBuffer);
-}
-
-// Pads with zero if necessary
-String pad(int num)
-{
-    if (num < 10 && num > 0) return "0" + String(num);
-    else return String(num);
-}
-
-String TZD()
-{
-    String str;
-    if (TZ_OFFSET > 0)
-        str = "+";
-    return str + pad(TZ_OFFSET / 3600) + ":00";
-}
-
-String ISODateTime()
-{
-    return String(year()) + "-" + pad(month()) + "-" + pad(day())        // Date
-        + "T" + pad(hour()) + ":" + pad(minute()) + ":" + pad(second())  // Time
-        + "+05:00";                                                      // Time zone
 }
 
 float GetTemp()
@@ -157,8 +135,8 @@ float GetTemp()
     
     ds.reset_search();
     
-    byte MSB = data[1];  // most significant bit
-    byte LSB = data[0];  // lease significant bit
+    byte MSB = data[1];  // most significant byte
+    byte LSB = data[0];  // lease significant byte
     
     float tempRead = ((MSB << 8) | LSB);  
     float TemperatureSum = tempRead / 16;
@@ -166,5 +144,18 @@ float GetTemp()
     return TemperatureSum;
   
 }
-
+void SD_On()
+{
+    pinMode(SD_CHIP_SELECT, OUTPUT);
+    pinMode(ETH_CHIP_SELECT, OUTPUT);
+    digitalWrite(ETH_CHIP_SELECT, HIGH);
+    digitalWrite(SD_CHIP_SELECT, LOW); 
+}
+void Eth_On()
+{
+    pinMode(SD_CHIP_SELECT, OUTPUT);
+    pinMode(ETH_CHIP_SELECT, OUTPUT);
+    digitalWrite(ETH_CHIP_SELECT, LOW);
+    digitalWrite(SD_CHIP_SELECT, HIGH); 
+}
 
