@@ -4,11 +4,14 @@
 #include <Time.h>
 #include <OneWire.h>
 #include <SD.h>
+#include <stdlib.h>
 
 byte macAddr[] = 
   { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xAD };  // Ethernet shield MAC address
 unsigned int UdpPort = 8888;               // UDP port to receive time data from NIST
 EthernetUDP Udp;                           // Arduino Udp object
+EthernetClient client;                     // For sending data to Base Station
+byte pi[] = { 192, 168, 1, 98 };           // Raspberry Pi Base Station address
 IPAddress timeServer(216, 171, 120, 36);   // nist1-ch1.ustiming.org (Chicago)
 const int NTP_PACKET_SIZE = 48;            // NTP time stamp is found in first 48 bytes
 byte packetBuffer[NTP_PACKET_SIZE];        // Buffer to hold incoming and outgoing packets               
@@ -24,7 +27,7 @@ void setup()
 {
     Serial.begin(9600); 
     Serial.println("starting Ethernet");
-    Eth_On();
+    //Eth_On();
     if (Ethernet.begin(macAddr) == 0)
     {
         Serial.println("DHCP failure");
@@ -34,13 +37,14 @@ void setup()
     if(!Udp.begin(UdpPort)) Serial.println("Udp error");
     else Serial.println("Udp started");
     t = GetNtpTime();
-    SD_On();
+    //SD_On();
     if (!SD.begin(SD_CHIP_SELECT))
     {
         Serial.println("SD init failed.");
         return;
     }
     Serial.println("SD init successful.");
+    //timeSinceUpload = millis();
 }
 
 void loop()
@@ -50,16 +54,28 @@ void loop()
     Serial.print(",");
     Serial.print(GetTemp());
     Serial.println();
+    //SD_On();
     logFile = SD.open("log.txt", FILE_WRITE);
     logFile.print(tm);
     logFile.print(",");
     logFile.print(GetTemp());
     logFile.println();
     logFile.close();
+    //Eth_On();
+    char test[10];
+    String temperature = dtostrf(GetTemp(), 5, 2, test);
+    String uploadstring = "GET http://192.168.1.98/upload.php?time=";
+    uploadstring += tm;
+    uploadstring += "&temp=";
+    uploadstring += temperature;
+    Serial.println(uploadstring);
+    client.connect(pi, 80);
+    client.println(uploadstring);
+    client.stop();
     delay(10000);
 }
 
-// Builds and sends a request packet and stores the response in packetBuffer
+// Builds and sends an NTP request packet and stores the response in packetBuffer
 unsigned long SendNtpPacket(IPAddress& addr)
 {
     // Clear out packetBuffer
@@ -144,18 +160,22 @@ float GetTemp()
     return TemperatureSum;
   
 }
-void SD_On()
+String TempString(float temp)
 {
-    pinMode(SD_CHIP_SELECT, OUTPUT);
-    pinMode(ETH_CHIP_SELECT, OUTPUT);
-    digitalWrite(ETH_CHIP_SELECT, HIGH);
-    digitalWrite(SD_CHIP_SELECT, LOW); 
+    
 }
-void Eth_On()
-{
-    pinMode(SD_CHIP_SELECT, OUTPUT);
-    pinMode(ETH_CHIP_SELECT, OUTPUT);
-    digitalWrite(ETH_CHIP_SELECT, LOW);
-    digitalWrite(SD_CHIP_SELECT, HIGH); 
-}
+//void SD_On()
+//{
+//    pinMode(SD_CHIP_SELECT, OUTPUT);
+//    pinMode(ETH_CHIP_SELECT, OUTPUT);
+//    digitalWrite(ETH_CHIP_SELECT, HIGH);
+//    digitalWrite(SD_CHIP_SELECT, LOW); 
+//}
+//void Eth_On()
+//{
+//    pinMode(SD_CHIP_SELECT, OUTPUT);
+//    pinMode(ETH_CHIP_SELECT, OUTPUT);
+//    digitalWrite(SD_CHIP_SELECT, HIGH);
+//    digitalWrite(ETH_CHIP_SELECT, LOW); 
+//}
 
