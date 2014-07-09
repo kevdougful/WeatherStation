@@ -1,181 +1,133 @@
-#include <Ethernet.h>
-#include <EthernetUdp.h>
+#include <MPL3115A2.h>
+#include <HTU21D.h>
+#include <Adafruit_CC3000.h>
+#include <ccspi.h>
 #include <SPI.h>
-#include <Time.h>
-#include <OneWire.h>
-#include <SD.h>
+#include <Wire.h>
 #include <stdlib.h>
 
-byte macAddr[] = 
-  { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xAD };  // Ethernet shield MAC address
-unsigned int UdpPort = 8888;               // UDP port to receive time data from NIST
-EthernetUDP Udp;                           // Arduino Udp object
-EthernetClient client;                     // For sending data to Base Station
-byte pi[] = { 192, 168, 1, 98 };           // Raspberry Pi Base Station address
-IPAddress timeServer(216, 171, 120, 36);   // nist1-ch1.ustiming.org (Chicago)
-const int NTP_PACKET_SIZE = 48;            // NTP time stamp is found in first 48 bytes
-byte packetBuffer[NTP_PACKET_SIZE];        // Buffer to hold incoming and outgoing packets               
-const int DELAY_SECONDS = 60;
-const int DS18B20_PIN = 7;
-const int SD_CHIP_SELECT = 8;
-const int ETH_CHIP_SELECT = 10;
-OneWire ds(DS18B20_PIN);
-File logFile;
-time_t t;
+// CC3000
+#define ADAFRUIT_CC3000_IRQ   3
+#define ADAFRUIT_CC3000_VBAT  5
+#define ADAFRUIT_CC3000_CS    10
+Adafruit_CC3000 cc3000 = 
+  Adafruit_CC3000(
+    ADAFRUIT_CC3000_CS, 
+    ADAFRUIT_CC3000_IRQ, 
+    ADAFRUIT_CC3000_VBAT,
+    SPI_CLOCK_DIVIDER);
+    
+const unsigned long connectTimeout  = 15L * 1000L; // Max time to wait for server connection
+uint32_t time;
+
+Adafruit_CC3000_Client client;
+
+#define WLAN_SSID       "COFFWILLHAUS"
+#define WLAN_PASS       "butterball"
+#define WLAN_SECURITY   WLAN_SEC_WPA2
+
+// Raspberry Pi base station
+uint32_t pi;
+
+// Weather shield
+MPL3115A2 myPressure;
+HTU21D myHumidity;
+const byte REFERENCE_3V3 = A3;
+const byte LIGHT = A1;
+const byte BLUE = 7;
+const byte GREEN = 8;
 
 void setup()
 {
-    Serial.begin(9600); 
-    Serial.println("starting Ethernet");
-    //Eth_On();
-    if (Ethernet.begin(macAddr) == 0)
-    {
-        Serial.println("DHCP failure");
-        while (true);  // No connection, so halt
-    }
-    delay(1000);
-    if(!Udp.begin(UdpPort)) Serial.println("Udp error");
-    else Serial.println("Udp started");
-    t = GetNtpTime();
-    //SD_On();
-    if (!SD.begin(SD_CHIP_SELECT))
-    {
-        Serial.println("SD init failed.");
-        return;
-    }
-    Serial.println("SD init successful.");
-    //timeSinceUpload = millis();
+  Serial.begin(115200);
+  Serial.println("initiating connection...");
+  pinMode(BLUE, OUTPUT);
+  pinMode(GREEN, OUTPUT);
+  pinMode(REFERENCE_3V3, INPUT);
+  pinMode(LIGHT, INPUT);
+  
+  //Configure the pressure sensor
+  myPressure.begin();              // Get sensor online
+  myPressure.setModeBarometer();   // Measure pressure in Pascals from 20 to 110 kPa
+  myPressure.setOversampleRate(7); // Set Oversample to the recommended 128
+  myPressure.enableEventFlags();   // Enable all three pressure and temp event flags 
+  
+  //Configure the humidity sensor
+  myHumidity.begin();
+  
+  cc3000.begin();
+  cc3000.deleteProfiles();
+  if (!cc3000.connectToAP(WLAN_SSID, WLAN_PASS, WLAN_SECURITY)) 
+  {
+    Serial.println("Failed!");
+    while(1);
+  } 
+  else 
+  {
+    Serial.print("Connected to "); 
+    Serial.println(WLAN_SSID);
+    digitalWrite(GREEN, HIGH);
+  } 
+  Serial.println("Requesting DHCP");
+  while (!cc3000.checkDHCP())
+  {
+    digitalWrite(BLUE, HIGH);
+    delay(200); // ToDo: Insert a DHCP timeout!
+    digitalWrite(BLUE, LOW);
+  }
+  Serial.println("DHCP ok");
+  
+  pi = cc3000.IP2U32(192,168,1,98);
 }
 
 void loop()
 {
-    time_t tm = t + (millis() / 1000);
-    Serial.print(tm);
-    Serial.print(",");
-    Serial.print(GetTemp());
-    Serial.println();
-    //SD_On();
-    logFile = SD.open("log.txt", FILE_WRITE);
-    logFile.print(tm);
-    logFile.print(",");
-    logFile.print(GetTemp());
-    logFile.println();
-    logFile.close();
-    //Eth_On();
-    char test[10];
-    String temperature = dtostrf(GetTemp(), 5, 2, test);
-    String uploadstring = "GET http://192.168.1.98/upload.php?time=";
-    uploadstring += tm;
-    uploadstring += "&temp=";
-    uploadstring += temperature;
-    Serial.println(uploadstring);
-    client.connect(pi, 80);
-    client.println(uploadstring);
-    client.stop();
-    delay(10000);
+  digitalWrite(BLUE, HIGH);
+  char buf[10];
+  String t, h, p, l;
+  time = millis();
+  do 
+  {
+      client = cc3000.connectTCP(pi, 80);
+  } 
+  while((!client.connected()) && ((millis() - time) < connectTimeout));
+  if (client.connected())
+  {
+    Serial.println("Connected to pi");
+    t = dtostrf(myPressure.readTempF(), 5, 2, buf);
+    h = dtostrf(myHumidity.readHumidity(), 5, 2, buf);
+    p = dtostrf(myPressure.readPressure() / 1000, 4, 2, buf);
+    l = dtostrf(getLight(), 1, 2, buf);
+    String request = "GET /upload.php?temp=" + t
+                     + "&humd=" + h
+                     + "&pres=" + p
+                     + "&lite=" + l;
+    Serial.println(request);
+    sendRequest(request);
+  }
+  digitalWrite(BLUE, LOW);
+  delay(15 * 1000);
+}
+bool sendRequest (String request) {
+  // Transform to char
+  char requestBuf[request.length()+1];
+  request.toCharArray(requestBuf,request.length()); 
+  // Send request
+  if (client.connected()) {
+    client.fastrprintln(requestBuf); 
+  } 
+  else {
+    Serial.println(F("Connection failed"));    
+    return false;
+  }
+  return true;
+  free(requestBuf);
 }
 
-// Builds and sends an NTP request packet and stores the response in packetBuffer
-unsigned long SendNtpPacket(IPAddress& addr)
+float getLight()
 {
-    // Clear out packetBuffer
-    memset(packetBuffer, 0, NTP_PACKET_SIZE);
-    // Build request packet...
-    packetBuffer[0] = 0b11100011;   // Leap Indicator, Version, Mode
-    packetBuffer[1] = 0;            // Stratum, or type of clock
-    packetBuffer[2] = 6;            // Polling Interval
-    packetBuffer[3] = 0xEC;         // Peer Clock Precision
-                                    // 8 bytes of zero for Root Delay & Root Dispersion
-    packetBuffer[12]  = 49;         // Reference identifier (32-bits)...
-    packetBuffer[13]  = 0x4E;
-    packetBuffer[14]  = 49;
-    packetBuffer[15]  = 52;
-    
-    Udp.beginPacket(addr, 123);  // Port 123 listens for NTP requests
-    Udp.write(packetBuffer, NTP_PACKET_SIZE);
-    Udp.endPacket();
-    delay(1000);  // wait for response
-    Udp.parsePacket();
-    Udp.read(packetBuffer, NTP_PACKET_SIZE);
+  float voltage = analogRead(REFERENCE_3V3);
+  float sensor = analogRead(LIGHT);
+  voltage = 3.3 / voltage;
+  return sensor * voltage;  
 }
-
-// Parses an NTP response packet and returns the seconds passed since 1/1/1970 
-unsigned long SecsSince1970(byte buffer[])
-{
-    unsigned long highWord = word(buffer[40], buffer[41]);
-    unsigned long lowWord = word(buffer[42], buffer[43]);
-    return (highWord << 16 | lowWord) - 2208988800;
-}
-
-unsigned long GetNtpTime()
-{
-   SendNtpPacket(timeServer);
-   return SecsSince1970(packetBuffer);
-}
-
-float GetTemp()
-{
-    byte data[12];
-    byte addr[8];
-    
-    if (!ds.search(addr))
-    {
-       ds.reset_search();
-       return -1000; 
-    }
-  
-    if (OneWire::crc8(addr, 7) != addr[7])
-    {
-       Serial.println("CRC is not valid!");
-       return -1000; 
-    }
-    
-    if (addr[0] != 0x10 && addr[0] != 0x28)
-    {
-       Serial.print("Device is not recognized");
-       return -1000;
-    }
-    
-    ds.reset();
-    ds.select(addr);
-    ds.write(0x44, 1);  // Start communication with the sensor.
-    
-    byte present = ds.reset();
-    ds.select(addr);
-    ds.write(0xBE); // Read Scratchpad.
-    
-    for (int i = 0; i < 9; i++)  // need 9 bytes
-    {
-        data[i] = ds.read(); 
-    }
-    
-    ds.reset_search();
-    
-    byte MSB = data[1];  // most significant byte
-    byte LSB = data[0];  // lease significant byte
-    
-    float tempRead = ((MSB << 8) | LSB);  
-    float TemperatureSum = tempRead / 16;
-    
-    return TemperatureSum;
-  
-}
-String TempString(float temp)
-{
-    
-}
-//void SD_On()
-//{
-//    pinMode(SD_CHIP_SELECT, OUTPUT);
-//    pinMode(ETH_CHIP_SELECT, OUTPUT);
-//    digitalWrite(ETH_CHIP_SELECT, HIGH);
-//    digitalWrite(SD_CHIP_SELECT, LOW); 
-//}
-//void Eth_On()
-//{
-//    pinMode(SD_CHIP_SELECT, OUTPUT);
-//    pinMode(ETH_CHIP_SELECT, OUTPUT);
-//    digitalWrite(SD_CHIP_SELECT, HIGH);
-//    digitalWrite(ETH_CHIP_SELECT, LOW); 
-//}
-
