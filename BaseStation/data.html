@@ -1,0 +1,46 @@
+<html>
+<head>
+	<title>Weather Station Data</title>
+	<script src="js/jquery-1.11.1.min.js"></script>
+	<script src="js/Chart.js"></script>
+</head>
+<body>
+	<div id="divMain">
+		<div id="filters">
+			<form onsubmit="test()">
+				<input type="date" id="chartDate"/>
+				<button type="button">TEST</button>
+			</form>
+		</div>
+		<canvas id="weatherChart" height="500" width="600"/>
+	</div>
+	<!-- Scripts -->
+	<script id="charts">
+		$(document).ready(function(){
+			var arr = get("2014-07-09");
+			var count = Object.keys(arr).length
+			alert(count);
+		});
+		function get(d) {
+			var data = $.get("fetch.php",
+			{date:d},
+			function(data, status){
+				alert(status);
+			});
+			return data;
+		}
+		
+/* 		var test = function() {
+			var selectedDate = $('#chartDate').val();
+			var data = $.ajax({
+				url		: "fetch.php",
+				data	: { date : '2014-07-08' },
+				dataType: "json"
+			});
+			console.log(data);
+		} 
+		$('#chartDate').change(function(){alert("ok");}); */
+		
+	</script>
+</body>
+</html>
